@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Bingo das Palavras</title>
+<style>
+:root{--bg:#f3f1fa;--card:#fff;--tx:#282538;--mut:#706c80;--pri:#7864d8;--ok:#438247;--line:#e2def0;--hot:#ffb84d;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(ellipse at 50% -15%,#e1dafb 0,transparent 55%),var(--bg);color:var(--tx);font:16px system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:620px;margin:0 auto;padding:22px 16px 40px}
+h1{font-size:1.5rem;margin:8px 0}h2{font-size:1.1rem;margin:16px 0 8px}
+.box{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px;margin-bottom:14px;box-shadow:0 8px 24px #3825720b}
+input{width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--tx);font:inherit;margin-bottom:8px}
+button{padding:12px 16px;border:0;border-radius:10px;background:var(--pri);color:#fff;font:inherit;font-weight:600;cursor:pointer}
+button.sec{background:var(--pri);color:#fff;border:1px solid var(--pri)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button:not(:disabled){transition:transform .15s,filter .15s}button:not(:disabled):active{transform:scale(.97)}
+input:focus,textarea:focus,button:focus-visible{outline:3px solid #a6c78a;outline-offset:2px}
+textarea{width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--tx);font:inherit;margin:8px 0}
+.hero{text-align:center;padding:8px 8px 18px}.hero h1{font-size:clamp(2rem,8vw,3rem);letter-spacing:-.05em;margin:0}.hero p{color:var(--mut);margin:5px 0}.eyebrow{color:var(--pri);font-weight:800;letter-spacing:.12em;text-transform:uppercase;font-size:.75rem}
+.statrow{display:flex;justify-content:space-between;gap:8px;align-items:center;margin:8px 0}.progress{height:8px;background:var(--bg);border-radius:9px;overflow:hidden;margin:8px 0}.progress span{display:block;height:100%;background:linear-gradient(90deg,var(--pri),#bd79ff);border-radius:9px;transition:width .25s}
+.drawn-list{max-height:115px;overflow:auto;margin-top:10px}.word-input{min-height:80px;resize:vertical}
+.qrbox{text-align:center}.qrbox canvas{width:min(100%,220px);height:auto;image-rendering:pixelated;background:#fff;padding:8px;border-radius:12px;margin:10px auto}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;animation-duration:.01ms!important;transition-duration:.01ms!important}}
+.row{display:flex;gap:8px;flex-wrap:wrap}.row>*{flex:1}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{padding:7px 12px;border-radius:99px;border:1px solid var(--pri);background:var(--pri);color:#fff;font-weight:500}
+.chip.sel{background:var(--pri);color:#fff;border-color:#44358f;outline:3px solid #44358f;outline-offset:1px}
+.chip.out{outline:2px solid var(--ok)}
+.mut{color:var(--mut);font-size:.9rem}
+.code{font-size:1.6rem;letter-spacing:.2em;font-weight:800;color:var(--pri)}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.cell{aspect-ratio:1;display:flex;align-items:center;justify-content:center;text-align:center;padding:4px;border-radius:12px;border:2px solid var(--pri);background:var(--pri);color:#fff;font-weight:600;font-size:clamp(.7rem,3.2vw,.95rem);word-break:break-word;position:relative}
+.cell.out{border-color:var(--ok)}
+.cell.on{background:#ffdf5d;color:#282538;border-color:#d49a00;outline:3px solid #d49a00;outline-offset:1px}
+.big{font-size:1.4rem;font-weight:800;text-align:center;padding:10px}
+.win{background:linear-gradient(120deg,#56663b,#78884c);color:#fff;border-radius:18px;text-align:center;font-size:1.35rem;font-weight:800;padding:18px;margin-bottom:14px;box-shadow:0 10px 30px #68774455;animation:pop .45s both}
+@keyframes pop{from{transform:scale(.85);opacity:.4}to{transform:scale(1);opacity:1}}
+</style>
+</head>
+<body>
+<main id="app"></main>
+<script>
+// ===== Constantes de ajuste =====
+const TAMANHO = 16;            // palavras na cartela (4x4)
+const COL = 4;                 // colunas
+
+// Estado da partida atual, guardado na memória deste aparelho.
+let S = {tela:'inicio', nome:'', codigo:'', sala:null, sel:[], cartela:[], marcas:new Set(), erro:'', souHost:false, pollTimer:null, qrUrl:''};
+const roomHash = (location.hash || '').slice(1).trim().toUpperCase();
+const $ = s => document.querySelector(s);
+const esc = t => String(t).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const embaralha = a => { a = a.slice(); for (let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];} return a; };
+function erro(mensagem){ S.erro=mensagem; render(); }
+
+async function criarSala(){
+  if(!S.nome.trim()) return erro('Digite seu nome antes de criar a sala.');
+  try{
+    const r=await fetch('/api/rooms',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:S.nome.trim()})});
+    if(!r.ok) throw new Error();
+    const sala=await r.json();entrar(sala,true);
+  }catch(e){erro('Não consegui acessar o servidor local. Inicie a partida pelo aparelho conectado ao Wi-Fi.');}
+}
+async function entrarSala(){
+  if(!S.nome.trim()) return erro('Digite seu nome antes de entrar.');
+  const code=($('#cod')?.value||'').trim().toUpperCase();
+  if(!code) return erro('Digite ou leia o código da sala.');
+  try{
+    const r=await fetch(`/api/rooms/${encodeURIComponent(code)}/join`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:S.nome.trim()})});
+    if(!r.ok) throw new Error();
+    entrar(await r.json(),false);
+  }catch(e){erro('Sala não encontrada. Confira se todos estão no mesmo Wi-Fi.');}
+}
+function entrar(sala,souHost){
+  if(S.pollTimer) clearInterval(S.pollTimer);
+  S.codigo=sala.code;S.sala=sala;S.souHost=souHost;S.tela='sala';S.erro='';S.qr=souHost;S.qrUrl=souHost?`${location.origin}/#${encodeURIComponent(sala.code)}`:'';
+  S.pollTimer=setInterval(atualizarSala,1000);render();
+  if(souHost) montarUrlQR().then(url=>{S.qrUrl=url;render();}).catch(e=>erro(e.message||'Não foi possível preparar o QR. Confira a conexão ao Wi-Fi local.'));
+}
+async function atualizarSala(){
+  if(!S.codigo)return;
+  try{
+    const r=await fetch(`/api/rooms/${encodeURIComponent(S.codigo)}`);
+    if(!r.ok)return;
+    const sala=await r.json();
+    if(JSON.stringify(sala)!==JSON.stringify(S.sala)){
+      const draft=$('#nova')?.value||'';
+      if((S.sala.drawn||[]).length&&(sala.drawn||[]).length===0) S.marcas=new Set();
+      S.sala=sala;render();if($('#nova'))$('#nova').value=draft;
+    }
+  }catch(e){/* A próxima consulta tenta reconectar sem interromper a partida. */}
+}
+async function montarUrlQR(){
+  // O QR é desenhado no próprio navegador, sem depender de serviços externos.
+  // A URL atual é o fallback; em localhost, trocamos pelo IP da rede local para
+  // que os celulares dos participantes consigam abrir a sala.
+  const fallback=`${location.origin}/#${encodeURIComponent(S.codigo)}`;
+  if(location.hostname.endsWith('.github.dev')||location.hostname.includes('codespaces'))return fallback;
+  try{
+    const r=await fetch('/api/network');if(!r.ok)return fallback;
+    const info=await r.json();
+    const localHost=['localhost','127.0.0.1','0.0.0.0'].includes(location.hostname);
+    const base=localHost&&info.addresses.length?`http://${info.addresses[0]}:${info.port}`:location.origin;
+    return `${base}/#${encodeURIComponent(S.codigo)}`;
+  }catch(e){return fallback;}
+}
+// Atualiza o estado compartilhado pelo servidor local.
+async function salvar(p){
+  const r=await fetch(`/api/rooms/${encodeURIComponent(S.codigo)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});
+  if(!r.ok)throw new Error('Falha ao salvar a sala.');
+  S.sala=await r.json();render();
+}
+
+// ===== Palavras e sorteio =====
+async function addPalavras(){
+  const inp=$('#nova'); const novas=inp.value.split(/[,\n]/).map(t=>t.trim()).filter(Boolean);
+  if(!novas.length) return;
+  const atual=S.sala.words||[];
+  const unicas=novas.filter((w,i)=>!atual.some(a=>a.toLowerCase()===w.toLowerCase()) && novas.findIndex(x=>x.toLowerCase()===w.toLowerCase())===i);
+  inp.value='';
+  try{ await salvar({words:[...atual,...unicas]}); }catch(e){ erro('Não foi possível adicionar as palavras.'); }
+}
+async function sortear(){
+  const fora=(S.sala.words||[]).filter(w=>!(S.sala.drawn||[]).includes(w));
+  if(!fora.length) return;
+  const w=fora[Math.floor(Math.random()*fora.length)];
+  try{ await salvar({drawn:[...(S.sala.drawn||[]),w]}); }catch(e){ erro('Sem permissão.'); }
+}
+async function reiniciarSorteio(){ try{ await salvar({resetRound:true}); }catch(e){} S.marcas=new Set(); render(); }
+
+// QR offline da URL local da sala (QR v4-L, sem serviços externos).
+function qrDaSala(texto){
+  const n=33,dataCount=80,eccCount=20;
+  const matriz=Array.from({length:n},()=>Array(n).fill(false)),reservado=Array.from({length:n},()=>Array(n).fill(false));
+  const por=(r,c,v)=>{if(r>=0&&r<n&&c>=0&&c<n){matriz[r][c]=!!v;reservado[r][c]=true;}};
+  const bits=[];const addBits=(v,len)=>{for(let i=len-1;i>=0;i--)bits.push((v>>>i)&1);};
+  const bytes=Array.from(new TextEncoder().encode(texto));if(bytes.length>78)throw new Error('Endereço muito longo para o QR.');
+  addBits(4,4);addBits(bytes.length,8);bytes.forEach(b=>addBits(b,8));
+  for(let i=0;i<Math.min(4,dataCount*8-bits.length);i++)bits.push(0);while(bits.length%8)bits.push(0);
+  const data=[];for(let i=0;i<bits.length;i+=8)data.push(parseInt(bits.slice(i,i+8).join(''),2));
+  for(let pad=0;data.length<dataCount;pad++)data.push(pad%2?0x11:0xec);
+  const mul=(x,y)=>{let z=0;while(y){if(y&1)z^=x;y>>=1;x<<=1;if(x&256)x^=0x11d;}return z;};
+  let gen=[1];for(let i=0;i<eccCount;i++){const next=Array(gen.length+1).fill(0);gen.forEach((v,j)=>{next[j]^=v;next[j+1]^=mul(v,1<<i);});gen=next;}
+  const rem=data.concat(Array(eccCount).fill(0));for(let i=0;i<dataCount;i++){const k=rem[i];if(k)gen.forEach((v,j)=>rem[i+j]^=mul(v,k));}
+  const stream=data.concat(rem.slice(dataCount)).flatMap(v=>Array.from({length:8},(_,i)=>(v>>(7-i))&1));
+  const finder=(r0,c0)=>{for(let dr=-1;dr<=7;dr++)for(let dc=-1;dc<=7;dc++){const r=r0+dr,c=c0+dc;if(r<0||r>=n||c<0||c>=n)continue;const inside=dr>=0&&dr<=6&&dc>=0&&dc<=6;por(r,c,inside&&(dr===0||dr===6||dc===0||dc===6||(dr>=2&&dr<=4&&dc>=2&&dc<=4)));}};
+  finder(0,0);finder(0,n-7);finder(n-7,0);
+  for(let i=8;i<n-8;i++){por(6,i,i%2===0);por(i,6,i%2===0);}
+  for(let dr=-2;dr<=2;dr++)for(let dc=-2;dc<=2;dc++)por(26+dr,26+dc,Math.max(Math.abs(dr),Math.abs(dc))===2||(dr===0&&dc===0));
+  let fmt=8<<10;for(let b=14;b>=10;b--)if((fmt>>>b)&1)fmt^=0x537<<(b-10);fmt=((8<<10)|fmt)^0x5412;const fb=i=>(fmt>>>i)&1;
+  for(let i=0;i<=5;i++)por(8,i,fb(i));por(8,7,fb(6));por(8,8,fb(7));por(7,8,fb(8));
+  for(let i=9;i<15;i++)por(14-i,8,fb(i));for(let i=0;i<8;i++)por(8,n-1-i,fb(i));for(let i=8;i<15;i++)por(n-15+i,8,fb(i));por(n-8,8,true);
+  let bit=0,up=true;for(let c=n-1;c>0;c-=2){if(c===6)c--;for(let k=0;k<n;k++){const r=up?n-1-k:k;for(let j=0;j<2;j++){const col=c-j;if(!reservado[r][col]){const v=bit<stream.length?stream[bit++]:0;matriz[r][col]=!!(v^(((r+col)%2===0)?1:0));}}}up=!up;}
+  return matriz;
+}
+function desenharQR(canvas,texto){
+  const m=qrDaSala(texto),ctx=canvas.getContext('2d'),quiet=4,scale=7,size=(m.length+quiet*2)*scale;canvas.width=size;canvas.height=size;
+  ctx.fillStyle='#fff';ctx.fillRect(0,0,size,size);ctx.fillStyle='#17251a';m.forEach((row,r)=>row.forEach((v,c)=>{if(v)ctx.fillRect((c+quiet)*scale,(r+quiet)*scale,scale,scale);}));
+}
+
+// ===== Cartela =====
+function alterna(w){
+  const i=S.sel.indexOf(w);
+  if(i>=0) S.sel.splice(i,1); else if(S.sel.length<TAMANHO) S.sel.push(w);
+  render();
+}
+function sorteiaSel(){ S.sel=embaralha(S.sala.words||[]).slice(0,TAMANHO); render(); }
+function gerarCartela(){ S.cartela=embaralha(S.sel); S.marcas=new Set(); S.tela='cartela'; render(); }
+function marcar(w){
+  if(!(S.sala.drawn||[]).includes(w)) return;  // só marque palavras que já saíram
+  S.marcas.has(w)?S.marcas.delete(w):S.marcas.add(w); render();
+}
+const ORDEM_PREMIOS=['linha','coluna','cartela cheia'];
+function cartelaTem(tipo){
+  const m=i=>S.marcas.has(S.cartela[i]); const n=COL;
+  if(tipo==='linha') return [...Array(n)].some((_,r)=>[...Array(n)].every((_,c)=>m(r*n+c)));
+  if(tipo==='coluna') return [...Array(n)].some((_,c)=>[...Array(n)].every((_,r)=>m(r*n+c)));
+  if(tipo==='cartela cheia') return S.cartela.length===TAMANHO&&S.cartela.every((_,i)=>m(i));
+  return false;
+}
+
+// Jogador aperta BINGO: valida as marcas e avisa a sala
+async function cantarBingo(){
+  const tipo=ORDEM_PREMIOS.find(t=>!S.sala.winners?.[t]);
+  if(!tipo) return erro('As três etapas já têm vencedores!');
+  if(!cartelaTem(tipo)) return erro(`Sua cartela ainda não completou ${tipo==='cartela cheia'?'a cartela cheia':`uma ${tipo}`}.`);
+  try{
+    const r=await fetch(`/api/rooms/${encodeURIComponent(S.codigo)}/claim`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:S.nome.trim(),type:tipo})});
+    const result=await r.json();
+    if(result.room) S.sala=result.room;
+    if(!r.ok){render();return erro(result.error||'Outra pessoa já ganhou esta etapa.');}
+    S.erro='';render();$('#vitoria')?.scrollIntoView({behavior:'smooth',block:'center'});
+  }catch(e){ erro('Não foi possível registrar o bingo.'); }
+}
+
+// ===== Telas =====
+function render(){
+  const a=$('#app'); const err=S.erro?`<div class="box" style="border-color:#d33">${esc(S.erro)}</div>`:'';
+  if(S.tela==='inicio'){
+    a.innerHTML=`<header class="hero"><div class="eyebrow">Diversão com linguagem</div><h1>🔤 Bingo das Palavras</h1><p>Escolha palavras, complete sua cartela e grite bingo!</p></header>${err}
+    <div class="box"><label class="mut" for="nome">Seu nome</label><input id="nome" placeholder="Ex.: Ana" value="${esc(S.nome)}" maxlength="20">
+    <button id="create" style="width:100%;margin-bottom:12px">Criar sala</button>
+    <label class="mut" for="cod">Código da sala</label><div class="row"><input id="cod" placeholder="Ex.: ABCD" value="${esc(S.codigo||roomHash)}" maxlength="8"><button class="sec" id="join" style="flex:0 0 auto">Entrar</button></div></div>
+    <div class="box mut"><b>Partida sem internet</b><br>Use o Wi-Fi local para conectar os aparelhos. O servidor da sala precisa estar iniciado no aparelho anfitrião.<br><br>Se esta página foi aberta pelo Codespaces, ela é apenas uma prévia: inicie o servidor em um computador conectado ao Wi-Fi e abra o endereço local mostrado no terminal.</div>`;
+    $('#nome').oninput=e=>S.nome=e.target.value;$('#cod').oninput=e=>S.codigo=e.target.value;$('#create').onclick=criarSala;$('#join').onclick=entrarSala;return;
+  }
+  const s=S.sala; if(!s){ a.innerHTML=`${err}<div class="box">Carregando sala…</div>`; return; }
+  const words=s.words||[], drawn=s.drawn||[], ult=drawn[drawn.length-1];
+  const topo=`<header class="hero"><div class="eyebrow">Sala ${esc(S.codigo)} · ${esc(S.nome)}</div><h1>📚 Bingo das Palavras</h1></header><div class="row" style="align-items:center;margin-bottom:14px"><div><div class="mut">${(s.players||[]).length} participante(s) · ${S.souHost?'anfitrião':'jogador'}</div></div><button class="sec" id="qrb" style="flex:0 0 auto">▦ QR da sala</button><button class="sec" id="sair" style="flex:0 0 auto">Sair</button></div>${S.qr?`<div class="box qrbox"><b>Leia para entrar na sala ${esc(S.codigo)}</b><br><canvas id="qr" aria-label="QR Code para entrar na sala"></canvas><div class="mut">Conecte-se ao mesmo Wi-Fi e leia o código com a câmera.</div><a href="${esc(S.qrUrl)}">${esc(S.qrUrl)}</a></div>`:''}`;
+  const winners=s.winners||{linha:null,coluna:null,'cartela cheia':null};
+  const ultimoPremio=[...ORDEM_PREMIOS].reverse().find(t=>winners[t]);
+  const venc=ultimoPremio?`<div id="vitoria" class="win" role="status" aria-live="assertive">🎉 BINGO ${esc(ultimoPremio)} de ${esc(winners[ultimoPremio])}!</div>`:'';
+  const etapa=ORDEM_PREMIOS.find(t=>!winners[t]);
+  const placar=`<div class="box"><h2 style="margin-top:0">🏆 Vencedores</h2><div class="chips">${ORDEM_PREMIOS.map(t=>`<span class="chip ${winners[t]?'out':''}">${esc(t)}: ${winners[t]?esc(winners[t]):'aguardando'}</span>`).join('')}</div><div class="mut" style="margin-top:8px">${etapa?`Próxima etapa: bingo ${esc(etapa)}.`:'Todas as etapas foram concluídas.'}</div></div>`;
+  const sorteio=`<div class="box"><div class="statrow"><span class="mut">PALAVRAS SORTEADAS</span><b>${drawn.length} / ${words.length}</b></div><div class="progress"><span style="width:${words.length?Math.round(drawn.length/words.length*100):0}%"></span></div><div class="mut">Palavra sorteada</div><div class="big">${ult?`✨ ${esc(ult)} ✨`:'A primeira pode ser sua!'}</div>
+    <div class="chips drawn-list">${drawn.map(w=>`<span class="chip out">${esc(w)}</span>`).join('')||'<span class="mut">Ainda não saiu nenhuma palavra.</span>'}</div>
+    ${S.souHost?`<div class="row" style="margin-top:10px"><button id="sort" ${drawn.length>=words.length?'disabled':''}>🎲 Sortear</button><button class="sec" id="rst">Zerar</button></div>`:'<div class="mut" style="margin-top:8px">Só o anfitrião sorteia.</div>'}</div>`;
+  if(S.tela==='sala'){
+    a.innerHTML=`${topo}${err}${venc}${placar}${sorteio}
+    ${S.souHost?`<div class="box"><h2 style="margin-top:0">Palavras da sala (${words.length})</h2>
+    <div class="mut" style="margin:4px 0 8px">As palavras adicionadas aqui aparecem abaixo para preencher a cartela.</div>
+    <textarea class="word-input" id="nova" placeholder="Digite palavras separadas por vírgula ou uma por linha"></textarea><button id="add" style="width:100%">Adicionar palavras</button></div>`:''}
+    <div class="box"><h2 style="margin-top:0">Monte sua cartela</h2>
+    <div class="mut" style="margin:4px 0 12px">Toque em ${TAMANHO} palavras para escolher. ${S.sel.length?`${S.sel.length} selecionadas.`:''}</div>
+    <div class="chips">${words.map(w=>`<button class="chip ${S.sel.includes(w)?'sel':''}" data-w="${esc(w)}">${esc(w)}</button>`).join('')||'<span class="mut">Adicione palavras para começar.</span>'}</div>
+    <div class="row" style="margin-top:12px"><button class="sec" id="rnd" ${words.length<TAMANHO?'disabled':''}>🎲 Escolher aleatoriamente</button><button id="ger" ${S.sel.length!==TAMANHO?'disabled':''}>Gerar cartela</button></div>
+    ${words.length<TAMANHO?`<div class="mut" style="margin-top:8px">Adicione pelo menos ${TAMANHO} palavras para continuar.</div>`:''}</div>`;
+    if(S.souHost){ $('#add').onclick=addPalavras; }
+    a.querySelectorAll('[data-w]').forEach(b=>b.onclick=()=>alterna(b.dataset.w));
+    $('#rnd').onclick=sorteiaSel;
+    $('#ger').onclick=gerarCartela;
+  } else {
+    a.innerHTML=`${topo}${err}${venc}${placar}${sorteio}
+    <div class="grid">${S.cartela.map(w=>`<button class="cell ${drawn.includes(w)?'out':''} ${S.marcas.has(w)?'on':''}" data-w="${esc(w)}">${esc(w)}</button>`).join('')}</div>
+    <div class="mut" style="margin:8px 0 12px">🟢 Já sorteada · toque para marcar na cartela.</div>
+    <button id="bingo" style="width:100%;font-size:1.3rem;padding:16px;margin-bottom:8px" ${etapa?'':'disabled'}>🎉 BINGO ${etapa?esc(etapa.toUpperCase()):'ENCERRADO'}!</button>
+    <button class="sec" id="voltar" style="width:100%">Trocar cartela</button>`;
+    a.querySelectorAll('[data-w]').forEach(c=>c.onclick=()=>marcar(c.dataset.w));
+    $('#voltar').onclick=()=>{S.tela='sala';render();};
+    $('#bingo').onclick=cantarBingo;
+  }
+  $('#sair').onclick=()=>{if(S.pollTimer)clearInterval(S.pollTimer);S={...S,pollTimer:null,qr:false,qrUrl:'',souHost:false,tela:'inicio',sala:null,sel:[],cartela:[],marcas:new Set(),erro:''};render();};
+  if($('#qrb')) $('#qrb').onclick=async()=>{if(S.qr){S.qr=false;render();return;}try{S.qrUrl=await montarUrlQR();S.qr=true;render();}catch(e){erro(e.message||'Não foi possível preparar o QR. Confira a conexão ao Wi-Fi local.');}};
+  if(S.qr&&S.qrUrl) desenharQR($('#qr'),S.qrUrl);
+  if(S.souHost){ $('#sort').onclick=sortear; $('#rst').onclick=reiniciarSorteio; }
+}
+render();
+</script>
+</body>
+</html>
+
+
+
+
+
+
