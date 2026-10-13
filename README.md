@@ -1,1 +1,1 @@
-# pr-sistema
+# pr-bingopalavras
